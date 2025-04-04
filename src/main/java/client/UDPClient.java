@@ -11,7 +11,7 @@ public class UDPClient {
     private static final int Server_Port = 1738;
     private static final int Tot_File_Size = 516;
     private static final int Actual_Data = 512;
-    private static final int Timeout = 10000; // in ms so 10 seconds
+    private static final int Timeout = 10000; //  10 second time out
     private static final int Connection_Attempts = 3;
 
     //Takes in server ip then runs menu function with that address as a variable
@@ -73,6 +73,7 @@ public class UDPClient {
 
 
 
+    //read file from server
     private static void readFile(InetAddress serverAddress, String filename, String serverIp) throws IOException {
         DatagramSocket socket = new DatagramSocket();
         socket.setSoTimeout(Timeout);
@@ -84,23 +85,23 @@ public class UDPClient {
         byte[] dataBuffer = new byte[Tot_File_Size];
         FileOutputStream fileOutStream = new FileOutputStream(filename);
 
-        int blockN = 1;
+        int blockNumber = 1;
         while (true) {
             DatagramPacket receivePacket = new DatagramPacket(dataBuffer, dataBuffer.length);
             socket.receive(receivePacket);
 
             int opcode = dataBuffer[1];
             if (opcode == 3) {
-                int receivedBlockN = ((dataBuffer[2] & 0xff) << 8) | (dataBuffer[3] & 0xff);
-                if (receivedBlockN == blockN) {
+                int receivedBlockNumber = ((dataBuffer[2] & 0xff) << 8) | (dataBuffer[3] & 0xff);
+                if (receivedBlockNumber == blockNumber) {
                     int dataLength = receivePacket.getLength() - 4;
                     fileOutStream.write(dataBuffer, 4, dataLength);
-                    sendAck(socket, serverAddress, receivedBlockN);
+                    sendAck(socket, serverAddress, receivedBlockNumber);
 
                     if (dataLength < Actual_Data) {
                         break;
                     }
-                    blockN++;
+                    blockNumber++;
                 }
             } else if (opcode == 5) {
                 System.out.println("error from server: " + new String(dataBuffer, 4, receivePacket.getLength() - 5));
@@ -148,8 +149,8 @@ public class UDPClient {
     private static void handleServerResponseDuringWrite(DatagramSocket socket, InetAddress serverAddress, String filename) throws IOException {
         FileInputStream fileInStream = new FileInputStream(filename);
         byte[] dataBuffer = new byte[Actual_Data];
-        int blockN = 1;
-        boolean ackReceived = false;
+        int blockNumber = 1;
+        boolean ackPacketReceived = false;
 
         for (int retry = 0; retry < Connection_Attempts; retry++) {
             int bytesRead = fileInStream.read(dataBuffer);
@@ -158,51 +159,53 @@ public class UDPClient {
                 return;
             }
 
-            byte[] dataPacket = createDataPacket(blockN, dataBuffer, bytesRead);
+            byte[] dataPacket = createDataPacket(blockNumber, dataBuffer, bytesRead);
             DatagramPacket dataPacketToSend = new DatagramPacket(dataPacket, dataPacket.length, serverAddress, Server_Port);
             socket.send(dataPacketToSend);
 
             try {
                 DatagramPacket ackPacket = new DatagramPacket(new byte[Tot_File_Size], Tot_File_Size);
                 socket.receive(ackPacket);
-                if (isValidAck(ackPacket.getData(), blockN)) {
-                    ackReceived = true;
+                if (validAck(ackPacket.getData(), blockNumber)) {
+                    ackPacketReceived = true;
                     break;
                 }
             } catch (SocketTimeoutException e) {
-                System.out.println("timeout while waiting for ACK #" + blockN + ". Retrying... Attempt " + (retry + 1));
+                System.out.println("timedout while waiting for ack - " + blockNumber + "Attempt " + (retry + 1));
                 int newTimeout = Timeout * (retry + 1);
                 socket.setSoTimeout(newTimeout);
             }
         }
 
-        if (!ackReceived) {
-            throw new IOException("failed to receive valid ACK for block #" + blockN);
+        if (!ackPacketReceived) {
+            throw new IOException("failed to receive valid ACK for block #" + blockNumber);
         }
 
         fileInStream.close();
     }
 
-
-    private static byte[] createDataPacket(int blockN, byte[] data, int length) {
+   // builds packet contents
+    private static byte[] createDataPacket(int blockNumber, byte[] data, int length) {
         byte[] dataPacket = new byte[4 + length];
         dataPacket[0] =0;
         dataPacket[1] =3;
-        dataPacket[2] =(byte) (blockN >> 8);
-        dataPacket[3]= (byte) (blockN);
+        dataPacket[2] =(byte) (blockNumber >> 8);
+        dataPacket[3]= (byte) (blockNumber);
         System.arraycopy(data, 0, dataPacket, 4, length);
         return dataPacket;
     }
 
-    private static void sendAck(DatagramSocket socket, InetAddress address, int blockN) throws IOException {
-        byte[] ackPacket= {0, 4, (byte) (blockN >> 8), (byte) (blockN)};
+
+    private static void sendAck(DatagramSocket socket, InetAddress address, int blockNumber) throws IOException {
+        byte[] ackPacket= {0, 4, (byte) (blockNumber >> 8), (byte) (blockNumber)};
         DatagramPacket packet = new DatagramPacket(ackPacket, ackPacket.length, address, Server_Port);
         socket.send(packet);
     }
 
-    private static boolean isValidAck(byte[] ackData, int blockN) {
-        int ackBlockN = ((ackData[2] & 0xff) << 8) | (ackData[3] & 0xff);
-        return ackData[1] == 4 && ackBlockN == blockN;
+    //checks whether ack packet is valid i.e. follows
+    private static boolean validAck(byte[] ackData, int blockNumber) {
+        int ackBlockNumber = ((ackData[2] & 0xff) << 8) | (ackData[3] & 0xff);
+        return ackData[1] == 4 && ackBlockNumber == blockNumber;
     }
 }
 
